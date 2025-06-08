@@ -70,33 +70,26 @@ class IPPanelChannel
      */
     public function send($notifiable, Notification $notification)
     {
-        $recipient = $this->getRecipient($notifiable, $notification);
+        // Resolve the message from the notification first.
+        $message = $notification->toPersianSms($notifiable);
+
+        if (!$message instanceof IPPanelMessage) {
+            if (is_string($message)) {
+                throw CouldNotSendNotification::invalidMessageObject("Message must be an instance of IPPanelMessage. String given: " . $message);
+            }
+            throw CouldNotSendNotification::invalidMessageObject($message);
+        }
+
+        // Determine the recipient. Prioritize the one set on the message itself.
+        $recipient = $message->recipient ?: $this->getRecipient($notifiable, $notification);
 
         if (!$recipient) {
             // No recipient found, do not proceed.
-            // You might want to log this event.
             return null;
         }
 
         // Ensure recipient is an array for IPPanel API
         $recipients = is_array($recipient) ? $recipient : [$recipient];
-
-        // Resolve the message from the notification.
-        // It should return an IPPanelMessage instance.
-        $message = $notification->toPersianSms($notifiable);
-
-        if (!$message instanceof IPPanelMessage) {
-            // If toPersianSms returns a string, we can try to create a default message
-            // or throw an error. For now, we expect an IPPanelMessage.
-            if (is_string($message)) {
-                 // For simplicity, let's assume a string message means a normal SMS
-                 // and we need to create an IPPanelMessage instance.
-                 // This part depends on how you want to design the IPPanelMessage class.
-                 // $message = IPPanelMessage::create($message); // Example
-                 throw CouldNotSendNotification::invalidMessageObject("Message must be an instance of IPPanelMessage. String given: " . $message);
-            }
-            throw CouldNotSendNotification::invalidMessageObject($message);
-        }
 
         $sender = $message->sender ?: $this->defaultSenderNumber; // Use message sender or default
 
@@ -113,8 +106,6 @@ class IPPanelChannel
                 throw CouldNotSendNotification::missingPatternCode();
             }
             if ($message->variables === null || !is_array($message->variables)) {
-                 // IPPanel expects variables to be an object (associative array)
-                 // even if empty for some patterns, or with actual values.
                 throw CouldNotSendNotification::invalidPatternVariables();
             }
 
@@ -155,14 +146,10 @@ class IPPanelChannel
             $statusCode = $response->getStatusCode();
             $responseBody = json_decode($response->getBody()->getContents(), true);
 
-            // Check for successful status codes and IPPanel specific success status
             if ($statusCode >= 200 && $statusCode < 300 && isset($responseBody['status']) && $responseBody['status'] === 'OK') {
-                // Optionally return the full response or just the message ID, etc.
-                // return $responseBody['data']['message_id'] ?? $response;
-                return $response; // Return the Guzzle response object for now
+                return $response;
             }
 
-            // If not explicitly 'OK', treat as an error
             $errorMessage = $responseBody['errorMessage'] ?? 'Unknown error from IPPanel.';
             if (is_array($errorMessage)) { // Sometimes error messages are arrays
                 $errorMessage = implode(', ', array_map(
@@ -174,12 +161,11 @@ class IPPanelChannel
             throw CouldNotSendNotification::serviceRespondedWithAnError($errorMessage, $statusCode, $responseBody);
 
         } catch (RequestException $exception) {
-            // Guzzle specific exception
             $response = $exception->getResponse();
-            $statusCode = $response ? $response->getStatusCode() : 503; // 503 Service Unavailable if no response
+            $statusCode = $response ? $response->getStatusCode() : 503;
             $responseBody = $response ? json_decode($response->getBody()->getContents(), true) : null;
             $errorMessage = $responseBody['errorMessage'] ?? $exception->getMessage();
-             if (is_array($errorMessage)) {
+            if (is_array($errorMessage)) {
                 $errorMessage = implode(', ', array_map(
                     function ($v, $k) { return sprintf("%s: %s", $k, implode('|',(array)$v)); },
                     $errorMessage,
@@ -188,7 +174,6 @@ class IPPanelChannel
             }
             throw CouldNotSendNotification::serviceRespondedWithAnError($errorMessage, $statusCode, $responseBody, $exception);
         } catch (\Exception $exception) {
-            // Other general exceptions
             throw CouldNotSendNotification::genericError($exception->getMessage(), $exception);
         }
     }
@@ -202,38 +187,29 @@ class IPPanelChannel
      */
     protected function getRecipient($notifiable, Notification $notification)
     {
-        // Standard Laravel way to get routing information for a channel
         if ($route = $notifiable->routeNotificationFor('persianSms', $notification)) {
             return $route;
         }
         if ($route = $notifiable->routeNotificationFor(static::class, $notification)) {
             return $route;
         }
-
-        // Custom method for this specific channel (if user defines it on notifiable)
         if (method_exists($notifiable, 'routeNotificationForIPPanel')) {
             return $notifiable->routeNotificationForIPPanel($notification);
         }
-
-        // Fallback to common phone number attributes
         if (isset($notifiable->phone_number)) {
             return $notifiable->phone_number;
         }
         if (isset($notifiable->mobile)) {
             return $notifiable->mobile;
         }
-
-        // If $notifiable itself is a string (phone number) or an array of strings
         if (is_string($notifiable) || (is_array($notifiable) && count(array_filter($notifiable, 'is_string')) === count($notifiable))) {
             return $notifiable;
         }
-
         return null;
     }
 
     /**
      * (Optional) Method to check account credit.
-     * Not directly used by the send method but can be a utility for the package.
      *
      * @return array|null Parsed JSON response from credit check or null on failure.
      * @throws CouldNotSendNotification
