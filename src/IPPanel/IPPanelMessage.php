@@ -1,5 +1,4 @@
 <?php
-
 namespace NotificationChannels\PersianSms\IPPanel;
 
 class IPPanelMessage
@@ -44,6 +43,14 @@ class IPPanelMessage
      */
     public ?string $time = null;
 
+    /**
+     * The recipient's phone number(s).
+     * If set, this will override the number from the notifiable model.
+     *
+     * @var string|array<string>|null
+     */
+    public string|array|null $recipient = null;
+
 
     /**
      * Create a new message instance for normal SMS.
@@ -66,6 +73,19 @@ class IPPanelMessage
         if (!empty($content)) {
             $this->content($content);
         }
+    }
+
+    /**
+     * Set the recipient's phone number(s).
+     * Overrides the recipient from the notifiable model.
+     *
+     * @param string|array<string> $recipient A single phone number or an array of phone numbers.
+     * @return $this
+     */
+    public function to(string|array $recipient): self
+    {
+        $this->recipient = $recipient;
+        return $this;
     }
 
     /**
